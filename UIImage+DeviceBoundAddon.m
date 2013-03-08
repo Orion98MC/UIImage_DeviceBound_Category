@@ -5,7 +5,7 @@
 //  Copyright (c) 2012 Monte-Carlo Computing. All rights reserved.
 //
 
-#define DEBUG_UIImage_DeviceBoundAddon
+//#define DEBUG_UIImage_DeviceBoundAddon
 
 #import "UIImage+DeviceBoundAddon.h"
 

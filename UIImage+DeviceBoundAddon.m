@@ -38,15 +38,38 @@ NS_INLINE NSString *NSStringFromUIDeviceOrientation(UIDeviceOrientation orientat
       break;
       
     case UIDeviceOrientationUnknown:
-#ifdef DEBUG_UIImage_DeviceBoundAddon
-      NSLog(@"Unknown orientation");
-#endif
-      return nil;
-      
     default:
       break;
   }
+#ifdef DEBUG_UIImage_DeviceBoundAddon
+  NSLog(@"Unknown orientation");
+#endif
   return nil;
+}
+
+NS_INLINE UIDeviceOrientation UIDeviceOrientationFromNSString(NSString *orientation) {
+  if ([orientation isEqualToString:@"Portrait"]) {
+    return UIDeviceOrientationPortrait;
+  } else
+  if ([orientation isEqualToString:@"Landscape"]) {
+    return UIDeviceOrientationLandscapeLeft;
+  } else
+  if ([orientation isEqualToString:@"LandscapeLeft"]) {
+    return UIDeviceOrientationLandscapeLeft;
+  } else
+  if ([orientation isEqualToString:@"LandscapeRight"]) {
+    return UIDeviceOrientationLandscapeRight;
+  } else
+  if ([orientation isEqualToString:@"FaceUp"]) {
+    return UIDeviceOrientationFaceUp;
+  } else
+  if ([orientation isEqualToString:@"FaceDown"]) {
+    return UIDeviceOrientationFaceDown;
+  } else
+  if ([orientation isEqualToString:@"PortraitUpsideDown"]) {
+    return UIDeviceOrientationPortraitUpsideDown;
+  }
+  return UIDeviceOrientationUnknown;
 }
 
 NS_INLINE NSString* degradedOrientationString(NSString *orientation) {
@@ -74,11 +97,60 @@ NS_INLINE NSString *NSStringFromUIUserInterfaceIdiom(UIUserInterfaceIdiom idiom)
   return @"";
 }
 
+static NSCharacterSet *modifiersCharacterSet = nil;
++ (NSDictionary *)constraintsForName:(NSString *)name {
+  NSMutableDictionary *contraints = [NSMutableDictionary dictionary];
+  NSString *baseName = nil;
+  NSString *orientation = nil;
+  NSString *scale = nil;
+  NSString *device = nil;
+  NSString *extention = nil;
+  
+  static dispatch_once_t onceToken;
+  dispatch_once(&onceToken, ^{
+    modifiersCharacterSet = [[NSCharacterSet characterSetWithCharactersInString:@"-~@."]retain];
+  });
+  
+  NSScanner *scanner = [NSScanner scannerWithString:name];
+  [scanner scanUpToCharactersFromSet:modifiersCharacterSet intoString:&baseName];
+
+  NSString *temp = nil;
+  while (scanner.scanLocation < name.length - 1) {
+    [scanner scanCharactersFromSet:modifiersCharacterSet intoString:&temp];
+    if ([temp isEqualToString:@"-"]) {
+      [scanner scanUpToCharactersFromSet:modifiersCharacterSet intoString:&orientation];
+    } else
+    if ([temp isEqualToString:@"~"]) {
+      [scanner scanUpToCharactersFromSet:modifiersCharacterSet intoString:&device];
+    } else
+    if ([temp isEqualToString:@"@"]) {
+      [scanner scanUpToCharactersFromSet:modifiersCharacterSet intoString:&scale];
+    } else
+    if ([temp isEqualToString:@"."]) {
+      [scanner scanUpToCharactersFromSet:modifiersCharacterSet intoString:&extention];
+    }
+  }
+  
+  if (baseName) contraints[@"basename"] = baseName;
+  if (orientation) contraints[@"orientation"] = orientation;
+  if (scale) contraints[@"scale"] = scale;
+  if (device) contraints[@"device"] = device;
+  if (extention) contraints[@"extention"] = extention;
+
+#ifdef DEBUG_UIImage_DeviceBoundAddon
+  NSLog(@"Constraints for name %@: %@", name, contraints);
+#endif
+
+  return contraints;
+}
+
 typedef void (^ModifierBlock)(NSString *, NSArray *nexts);
 
 + (id)deviceBoundImageNamed:(NSString *)path {
-  NSString *basename = [path stringByDeletingPathExtension];
-  NSString *extention = [path pathExtension];
+  NSDictionary *constraints = [self constraintsForName:path];
+
+  NSString *basename = constraints[@"basename"];
+  NSString *extention = constraints[@"extention"];
   BOOL hasExtention = extention.length > 0;
   
   CGRect bounds = [UIScreen mainScreen].bounds;
@@ -113,8 +185,10 @@ typedef void (^ModifierBlock)(NSString *, NSArray *nexts);
   };
   
   ModifierBlock m_orientation = ^(NSString *input, NSArray *nexts) {
-    NSString *orientation = NSStringFromUIDeviceOrientation([UIDevice currentDevice].orientation);
     SET_NEXT(nexts)
+    if (constraints[@"orientation"]) _next([input stringByAppendingFormat:@"-%@", constraints[@"orientation"]], _nexts);
+    
+    NSString *orientation = NSStringFromUIDeviceOrientation((UIDeviceOrientation)([UIApplication sharedApplication].statusBarOrientation));
     while (orientation.length) {
       _next([input stringByAppendingFormat:@"-%@", orientation], _nexts);
       orientation = degradedOrientationString(orientation);
@@ -123,20 +197,24 @@ typedef void (^ModifierBlock)(NSString *, NSArray *nexts);
   };
   
   ModifierBlock m_scale = ^(NSString *input, NSArray *nexts) {
-    CGFloat scale = [UIScreen mainScreen].scale;
     SET_NEXT(nexts)
+    if (constraints[@"scale"]) _next([input stringByAppendingFormat:@"@%@", constraints[@"scale"]], _nexts);
+    
+    CGFloat scale = [UIScreen mainScreen].scale;
     if (scale > 1.0) _next([input stringByAppendingFormat:@"@%dx", (int)floor(scale)], _nexts);
     if (!isJony5) _next(input, _nexts);
   };
   
   ModifierBlock m_device = ^(NSString *input, NSArray *nexts) {
     SET_NEXT(nexts)
+    if (constraints[@"device"]) _next([input stringByAppendingFormat:@"~%@", constraints[@"device"]], _nexts);
     _next([input stringByAppendingFormat:@"~%@", NSStringFromUIUserInterfaceIdiom(UI_USER_INTERFACE_IDIOM())], _nexts);
     _next(input, _nexts);
   };
   
   ModifierBlock terminator = ^(NSString *input, NSArray *nexts) {
-    [names addObject:hasExtention ? [input stringByAppendingPathExtension:extention] : input];
+    // Unique names filter
+    if ([names indexOfObject:input] == NSNotFound) [names addObject:input];
   };
   
   m_j5(basename, @[
@@ -150,18 +228,51 @@ typedef void (^ModifierBlock)(NSString *, NSArray *nexts);
   NSLog(@"Possible image names: %@", names);
 #endif
   
+  NSString *imagePath = nil;
   for (NSString *name in names) {
-    UIImage *image = [UIImage imageNamed:name];
-    if (image) {
+    imagePath = [[NSBundle mainBundle]pathForResource:name ofType:hasExtention ? extention : @"png"];
+    if (!imagePath) continue;
+
+    UIImage *_image = [UIImage imageWithContentsOfFile:imagePath];
+    NSDictionary *imageContraints = [self constraintsForName:name];
+    CGFloat scale = imageContraints[@"scale"] ? [imageContraints[@"scale"]floatValue] : 1.;
+    UIImageOrientation orientation = UIImageOrientationUp;
+    
+    if (imageContraints[@"orientation"]) {
+      switch (UIDeviceOrientationFromNSString(imageContraints[@"orientation"])) {
+        case UIDeviceOrientationFaceUp:
+        case UIDeviceOrientationPortrait:
+          orientation = UIImageOrientationUp;
+          break;
+
+        case UIDeviceOrientationFaceDown:
+        case UIDeviceOrientationPortraitUpsideDown:
+          orientation = UIImageOrientationDown;
+          break;
+        
+        case UIDeviceOrientationLandscapeLeft:
+          orientation = UIImageOrientationRight;
+          break;
+
+        case UIDeviceOrientationLandscapeRight:
+          orientation = UIImageOrientationLeft;
+          break;
+          
+        default:
+          break;
+      }
+    }
+    
+    UIImage *image = [UIImage imageWithCGImage:_image.CGImage scale:scale orientation:orientation];
+
 #ifdef DEBUG_UIImage_DeviceBoundAddon
-      // It's a hint, it may not be the real filename that was loaded for imageNamed may have done it's own effort
-      NSLog(@"Loaded image from filename: %@", name);
+      NSLog(@"Loaded image from filename: %@ with constraints: %@", name, imageContraints);
 #endif
       return image;
-    }
   }
   
   return nil;
 }
+
 @end
 
